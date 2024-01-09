@@ -1,0 +1,391 @@
+---
+title: "The Impact of Time of Year and Location on the Frequency of UFO Sightings"
+author: "Zhenya Ratushko, Connor Herbert, Eli Berkowitz, Fars Alkheleiwi"
+output: html_document
+---
+
+\renewcommand{\prob}{\mathsf{P}}
+\newcommand{\E}{\mathsf{E}}
+\newcommand{\Var}{\mathsf{Var}}
+\newcommand{\SD}{\mathsf{SE}}
+\newcommand{\SE}{\mathsf{SE}}
+
+
+### Introduction
+
+Unidentified flying objects, also known as UFOs, are an interesting phenomena in that their existence (or lack thereof) is often talked about, but never in a scientific or analytical way. We were interested in better understanding the spread of reported UFO sightings across the United States, which led us to our guiding question: How does the time of year and location impact the number of UFO sightings? Through our analysis, we found that the number of sightings in the United States tends to be highest in states located in the American West during the summer months.
+
+### Background
+
+This dataset^[“UFO Sightings - Dataset by Timothy Renner”. Data.world, 26 Feb 2023, [data.world/timothyrenner/ufo-sightings/workspace/file?filename=nuforc_reports.csv](data.world/timothyrenner/ufo-sightings/workspace/file?filename=nuforc_reports.csv)] is a collection of 100,000+ self-reported (anybody can file a report at nuforc.org^["File a Report". National UFO Reporting Center, [https://nuforc.org/file-a-report/](https://nuforc.org/file-a-report/)]) UFO sightings from the National UFO Reporting Center (NUFORC), with reports from all over the world. For the purpose of this analysis, we extracted and used only reports of sightings that occurred in the United States, were from the last ten years (2013-2022), and had no missing values for any of our key variables. The key pre-existing variables in this dataset relating to time of year are `month` and `year`; we also added a variable called `season`, with each of the four seasons corresponding to three months in a year (ex. winter is months 12-2 [December to February], spring is months 3-5 [March to May], and so on). The key pre-existing variable in this dataset relating to location is `state`, and we also added a variable called `region` based on divisions created by the US Census Bureau^["Census Regions and Divisions of the United States". U.S. Census Bureau, [https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf](https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf)]. In the dataset, a single row represents a single sighting. If the data may be thought of as a sample from some larger population, the larger population would include all people that have ever seen a UFO but not reported it to NUFORC.
+
+Some unusual factors that may affect our interpretation of results is that, due to this data being made of self-reported accounts of UFOs, there is no guarantee that there is no overlap in sightings nor that each one is unique (i.e. one UFO could have been reported by multiple people). Another factor relating to this idea is that some of the objects reported may actually HAVE been identified, which would skew the data. One more factor is that the number of UFO sightings went up dramatically during 2020, when the COVID-19 pandemic broke out, presumably because more people were home and were more likely to notice and report objects in the sky.
+
+In the rest of this report, we intend to analyze the impacts of time of year and location on the number, both total and average, of UFO sightings and whether there is statistically significant evidence that there is a difference in the number of sightings between times of year (seasons, months) and locations (states, regions). We also plan on including various graphs providing different overviews of the data to better understand it.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      error = TRUE, fig.height = 4)
+library(tidyverse)
+library(kableExtra)
+library(egg)
+
+source("../scripts/viridis.R")
+source("../scripts/ggprob.R")
+
+theme_set(theme_minimal())
+```
+
+```{r, include = FALSE}
+ufo_sightings = read_csv("../data/nuforc_reports.csv")
+```
+
+```{r, include = FALSE}
+ufo_official = ufo_sightings %>%
+  select(-summary, -city, -stats, -report_link, -text, -posted, -city_latitude, -city_longitude, -shape, 
+         -duration) %>%
+  rename(date = date_time) %>%
+  mutate(date = as.character(date)) %>%
+  filter(state != "NA", country == "USA", date != "NA") %>%
+  mutate(region = case_when(state == "WA" | state == "OR" | state == "CA" | state == "NV" | state == "ID" 
+                            | state == "NM" | state == "MT" | state == "WY" | state == "CO" | state == "AZ" 
+                            | state == "UT" | state == "AK" | state == "HI" ~ "West",
+                            state == "TX" | state == "OK" | state == "AR" | state == "LA" | state == "MS" 
+                            | state == "AL" | state == "FL" | state == "GA" | state == "SC" | state == "NC" 
+                            | state == "TN" | state == "KY" | state == "WV" | state == "VA" | state == "DC" 
+                            | state == "DE" | state == "MD" ~ "South",
+                            state == "ND" | state == "SD" | state == "NE" | state == "MN" | state == "IA" 
+                            | state == "MO" | state == "WI" | state == "IL" | state == "IN" | state == "MI" 
+                            | state == "OH" | state == "KS" ~ "Midwest",
+                            state == "PA" | state == "NY" | state == "NJ" | state == "CT" | state == "RI" 
+                            | state == "MA" | state == "VT" | state == "NH" | state == "ME" ~ "Northeast")) %>%
+  select(-country) %>%
+  mutate(date = as_date(date)) %>%
+  mutate(year = year(date),
+         month = month(date, label = TRUE),
+         day = day(date),
+         wday = wday(date, label = TRUE),
+         yday = yday(date)) %>%
+  mutate(season = case_when(month == "Mar" | month == "Apr" | month == "May" ~ "Spring", 
+                            month == "Jun" | month == "Jul" | month == "Aug" ~ "Summer", 
+                            month == "Sep" | month == "Oct" | month == "Nov" ~ "Fall", 
+                            month == "Dec" | month == "Jan" | month == "Feb" ~ "Winter")) %>%
+  relocate(region, state, date, wday, month, day, year) %>%
+  filter(year >= 2013, region != "NA") %>%
+  mutate(month = fct_relevel(month, c("January", "February", "March", "April", "May", "June", "July", "August",
+                                      "September", "October", "November", "December")),
+         season = fct_relevel(season, c("Winter", "Spring", "Summer", "Fall")),
+         region = fct_relevel(region, c("West", "South", "Midwest", "Northeast")))
+
+ufo_official
+```
+
+### Graphical Displays of Data
+
+```{r, echo = FALSE}
+ggplot(ufo_official, aes(x = state)) +
+  geom_bar(color = "black", fill = "skyblue") +
+  ggtitle("UFO Sightings by State (2013-2022)") +
+  xlab("State") +
+  ylab("Total Number of Sightings") +
+  theme(axis.text.x = element_text(size = 7, angle = 90)) 
+```
+
+The above graph depicts the total number of reported UFO sightings for all states since 2013. From this graph, it is visible that California and Florida have the greatest number of reported sightings, being the only states with over 3500. Each state's total population could be a factor in why there are higher numbers of sightings in some states versus others -- for example, Washington DC, North Dakota, Wyoming, and Delaware all have very low numbers of sightings and are also some of the least populated states in the US.
+
+<br>
+
+```{r, echo = FALSE}
+avg_sightings_per_region_per_year = ufo_official %>%
+  group_by(region, year) %>%
+  summarize(avgsightings = n() / n_distinct(year))
+
+ggplot(avg_sightings_per_region_per_year, aes(x = region, y = avgsightings, fill = region)) +
+  geom_boxplot(color = 'black') +
+  labs(title = 'Average Sightings per Year Across US Regions',
+       y = "Average Sightings", x = "Region") 
+```
+
+The above box plot shows the average number of reported UFO sightings per year for each region. The West and South are shown to have a higher number of sightings than the Midwest and Northeast, with the observed count in the West being slightly higher than in the South.
+
+<br>
+
+```{r, echo = FALSE}
+ufo_monthandyear = ufo_official %>%
+  mutate(month = format(date, "%B"),
+         year = format(date, "%Y"),
+         month = fct_relevel(month, c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))) %>%
+  group_by(month, year) %>%
+  summarize(count = n()) 
+  
+ggplot(ufo_monthandyear, aes(x = month, y = count, group = year, color = year)) +
+  geom_point() +
+  geom_line() +
+  ggtitle("UFO Sightings by Month and Year (2013-2022)") +
+  xlab("Month") +
+  ylab("Total Number of Sightings") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The above graph compares each year since 2013 to its total number of reported UFO sightings by month, with each point corresponding to a month/year combination (ex. January 2014 is the highest point in the vertical line having "January" as its corresponding x-label). In general, the five most recent years (2018-2022) have a lower number of total sightings compared to the five least recent years (2013-2017). This graph also shows a fairly consistent peak in the amount of reported sightings in July and a drop in February for each year. 
+
+<br>
+
+```{r, echo = FALSE}
+monthly_ufo = ufo_official %>% 
+  group_by(year, month) %>% 
+  summarize(n = n())
+
+jan_sightings = monthly_ufo %>% 
+  filter(month == "Jan") 
+
+ggplot(jan_sightings) +
+  geom_col(aes(y = n, x = year, fill = year)) +
+  labs(x = "Year", y = "Number of Sightings", title = "Total Number of Sightings in January", subtitle = "2013-2022") +
+  scale_x_continuous(n.breaks = 10) +
+  theme(legend.position = "none")
+```
+
+The above graph shows the total number of UFO sightings in a sample month (January) for all years in our dataset. Here, a general downward trend can be observed, with an outlier in the year 2020.
+
+<br>
+
+```{r, echo = FALSE}
+ggplot(monthly_ufo, aes(y = n, x = year)) +
+  geom_point() +
+  labs(x = "Year", y = "Total Number of Sightings", title = "Monthly Count of UFO Sightings by Year") +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(n.breaks = 10) +
+  theme(axis.text.x  = element_text(angle = 90))
+```
+
+The above graph depicts the total number of UFO sightings for each month for all years in our dataset, providing a deeper look into the trend observed in the graph before this: a general downward slope for the total number of reported sightings. 
+
+<br>
+
+```{r, echo = FALSE}
+ggplot(ufo_official, aes(x = season, fill = season)) +
+  geom_bar(color = "black") +
+  ggtitle("Total UFO Sightings by Season (2013-2022)") +
+  xlab("Season") +
+  ylab("Number of Sightings")
+```
+
+The above graph compares each season to its total number of reported sightings since 2013, showing that more people are reporting sightings of UFOs during the fall and summer months than in other seasons.
+
+<br>
+
+```{r, echo = FALSE}
+reg_sea_ufo = ufo_official %>% 
+  group_by(region, season) %>% 
+  summarize(season, region, n = n())
+
+ggplot(reg_sea_ufo, aes(x = season, y = region, size = n)) +
+  geom_point() +  
+  theme_minimal() +
+  labs(title = "UFO Sightings by Region and Season (2013-2022)",
+       x = "Season",
+       y = "Region",
+       size = "Number of Sightings") +
+  theme(legend.position = "bottom") +
+  scale_size(range = c(0, 10))
+```
+
+The above graph compares the total number of UFO sightings by the region and season they were reported in. We can observe that while the Northeast and Midwest regions had a lower number of sightings in their winter and spring months compared to their summer and fall months, the number of sightings stayed fairly consistent across all seasons in the South and West regions.
+
+```{r, echo = FALSE}
+ufo = ufo_official %>% 
+  select(year, season, region) %>%
+  group_by(year, season, region) %>% 
+  summarise(n=n())
+
+ufo_wide = ufo %>%
+  pivot_wider(names_from = season, values_from = n)
+```
+
+### Analysis
+
+To understand this data on a deeper level, we analyzed the linear model for sightings in each season from 2013-2022, used the calculated slope to make an inference about its impact on the total number of sightings, and examined the outputted p-value to determine whether there was statistically significant evidence that the change in the number of UFO sightings for that season was different than in other seasons and if there was a relationship between season and number of sightings. The intercept that we found for each model is meant to represent the number of sightings in year 0, but because our data comes from a 10-year period, it does not make sense to and we cannot extrapolate to a year 0, so we will not be utilizing that value in our explanation of the models for each season.
+
+```{r, include = FALSE}
+winter_model = lm(Winter ~ year, data = ufo_wide)
+summary(winter_model)
+
+cf = coef(winter_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across all winter months, we can make the inference that the rate of UFO sightings in the winter is decreasing by around 64 sightings per year. Because of our determination of a p-value of 0.05985, we are unable to say that there is a relationship between the number of UFO sightings and the winter season, nor can we say that the change in the number of UFO sightings in the winter season is different than it is for other seasons.
+
+```{r, include = FALSE}
+spring_model = lm(Spring ~ year, data = ufo_wide)
+summary(spring_model)
+
+cf = coef(spring_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across all spring months, we can make the inference that the rate of UFO sightings in the spring is decreasing by around 36 sightings per year. Because of our determination of a p-value of 0.5256, we are unable to say that there is a relationship between the number of UFO sightings and the spring season, nor can we say that the change in the number of UFO sightings in the spring season is different than it is for other seasons.
+
+```{r, include = FALSE}
+summer_model = lm(Summer ~ year, data = ufo_wide)
+summary(summer_model)
+
+cf = coef(summer_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across all summer months, we can make the inference that the rate of UFO sightings in the summer is decreasing by around 155 sightings per year. Because of our determination of a p-value of 0.00709, we are able to say that there is a relationship between the number of UFO sightings and the summer season and that the change in the number of UFO sightings in the summer season is different than it is for other seasons.
+
+```{r, include = FALSE}
+fall_model = lm(Fall ~ year, data = ufo_wide)
+summary(fall_model)
+
+cf = coef(fall_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across all fall months, we can make the inference that the rate of UFO sightings in the fall is decreasing by around 137 sightings per year. Because of our determination of a p-value of 0.01622, we are able to say that there is a relationship between the number of UFO sightings and the fall season and that the change in the number of UFO sightings in the fall season is different than it is for other seasons.
+
+Using linear models, we found the slope of the number of UFO sightings in each season to be decreasing, meaning that as time has gone on, the number of UFO sightings reported to NUFORC has also decreased across all periods in a given year.
+
+<br>
+
+```{r, echo = FALSE}
+spring_summer = c(3072, 2453, 3621, 2630, 2350, 2187, 1462, 2191, 3769, 1696, 1557)
+fall_winter = c(4386, 4705, 4524, 3898, 3054, 2626, 1829, 3752, 3005, 1535, 2076)
+
+df = data.frame(
+  group = rep(c("Months 1-6", "Months 7-12"), each = length(spring_summer)),
+  value = c(spring_summer, fall_winter)
+)
+
+ggplot(df, aes(x = group, y = value, fill = group)) +
+  geom_violin() +
+  geom_boxplot(width = 0.2, color = "black", alpha = 0) +
+  labs(title = "Violin Graph of UFO Sightings",
+       x = "Time of Year",
+       y = "Total Number of Sightings") +
+  theme_minimal() 
+```
+ 
+The above graph shows how the total number of UFO sightings is affected by the time of year. There is a higher count of sightings in months 7-12 (July to December) in comparison to months 1-6 (January to June). The mean is also higher, shown by the box plot in the middle of each violin shape. Months 7-12 have a more even distribution of sightings, while it is much more common to have an average total number of roughly 2300 sightings in months 1-6.
+
+<br>
+
+We then analyzed a linear model for sightings in each region from 2013-2022 and repeated the same process of using the calculated slope to make an inference about its impact on the total number of sightings and examining the outputted p-value to determine whether there was statistically significant evidence that the change in the number of UFO sightings for that region was different than in other regions and if there was a relationship between region and number of sightings. 
+
+```{r, echo = FALSE}
+ufo_wider = ufo %>%
+  pivot_wider(names_from = region, values_from = n)
+```
+
+```{r, include = FALSE}
+midwest_model = lm(Midwest ~ year, data = ufo_wider)
+summary(midwest_model)
+
+cf = coef(midwest_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across the Midwest region, we can make the inference that the rate of UFO sightings in the Midwest is decreasing by around 17 sightings per year. Because of our determination of a p-value of 0.0079, we can say that there is a relationship between the number of UFO sightings and the Midwest region and that the change in the number of UFO sightings in the Midwest is different than it is for other regions.
+
+```{r, include = FALSE}
+northeast_model = lm(Northeast ~ year, data = ufo_wider)
+summary(northeast_model)
+
+cf = coef(northeast_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across the Northeast region, we can make the inference that the rate of UFO sightings in the Northeast is decreasing by around 15 sightings per year. Because of our determination of a p-value of 0.007063, we can say that there is a relationship between the number of UFO sightings and the Northeast region and that the change in the number of UFO sightings in the Northeast is different than it is for other regions.
+
+```{r, include = FALSE}
+south_model = lm(South ~ year, data = ufo_wider)
+summary(south_model)
+
+cf = coef(south_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across the South region, we can make the inference that the rate of UFO sightings in the South is decreasing by around 33 sightings per year. Because of our determination of a p-value of 2.601e-05, we can say that there is a relationship between the number of UFO sightings and the South region and that the change in the number of UFO sightings in the South is different than it is for other regions.
+
+```{r, include = FALSE}
+west_model = lm(West ~ year, data = ufo_wider)
+summary(west_model)
+
+cf = coef(west_model)
+cf
+```
+
+Based off of a linear regression model comparing the number of sightings across the West region, we can make the inference that the rate of UFO sightings in the West is decreasing by around 32 sightings per year. Because of our determination of a p-value of 0.0001827, we can say that there is a relationship between the number of UFO sightings and the West region and that the change in the number of UFO sightings in the West is different than it is for other regions.
+
+<br>
+
+```{r, echo = FALSE}
+ufo_long = gather(ufo_wide, key = "season", value = "n", -year, -region)
+df_summed = ufo_long %>%
+  group_by(region, season) %>%
+  summarise(n = sum(n))
+
+
+ggplot(df_summed, aes(x = region, y = n, fill = season)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "UFO Sightings across all Seasons and Regions",
+       x = "Region",
+       y = "Sightings",
+       fill = "Season") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The above graph shows how there is a higher total number of UFO sightings in the South and West regions, as well as in the fall and summer months. 
+
+<br>
+
+```{r, include = FALSE}
+ufo_biannual = ufo_official %>%
+   mutate(range = case_when(month == "Jan" | month == "Feb" | month == "Mar" | month == "Apr" | 
+                            month == "May" | month == "Jun" ~ "Months 1-6", 
+                            month == "Jul" | month == "Aug" | month == "Sep" | month == "Oct" | 
+                            month == "Nov" | month == "Dec"  ~ "Months 7-12")) 
+
+sum_biannual = ufo_biannual %>% 
+  group_by(range) %>%
+  summarize(n = n())
+```
+
+We then analyzed the difference in means between the first six months of the year and the last six months of the year from 2013-2022 in order to determine how the time of year impacts the number of UFO sightings.
+
+- Hypotheses
+
+    $H_0: \mu_1 = \mu_2$   
+    
+    $H_a: \mu_1 \neq \mu_2$
+
+
+- Test statistic
+
+    $t = \frac{\bar{x} - \bar{y}}{\text{SE}(\bar{x} - \bar{y})}$
+
+```{r, include = FALSE}
+t.test(x = c(3072, 2453, 3621, 2630, 2350, 2187, 1462, 2191, 3769, 1696, 1557),
+       y = c(4386, 4705, 4524, 3898, 3054, 2626, 1829, 3752, 3005, 1535, 2076),
+       paired = FALSE)
+```
+
+```{r, echo = FALSE}
+tstat = -1.8607
+gt(11, a = -5, b = 5) +
+  geom_t_fill(11, a = -5, b = tstat) +
+  geom_t_fill(11, a = abs(tstat), b = 5) +
+  xlab("t statistic") +
+  ggtitle("P-value visualization",
+          subtitle = "11 degrees of freedom, t-stat = -1.8607") 
+```
+
+The evidence is not consistent with there being a difference in the mean number of UFO sightings from the same 10 year span (2013-2022) between the first six months of the year and the last six months of the year (p = 0.08, two-sided t-test, df = 11). We can see that our findings of the mean number of sightings from July - December is greater than the mean number of sightings from January - June in the context of our analysis. In our “UFO Sightings by Month and Year” graph, we see a consistent peak in July, and a typical drop in February, which is consistent with our found mean relationship. In our “Total UFO Sightings by Season” graph, both the summer and fall bars are greater than the winter and spring bars, and most of the summer and fall months fall within our July - December timeline from our means.
+
+### Discussion
+
+Based on our data analysis, we can determine that the number of UFO sightings does indeed differ in regards to time of year and location. Through the visualization of our data set, we were able to see that the highest counts generally come from the West region of the US during the summer months. Through our analysis via linear regression models, we were able to determine that there is statistically significant evidence that the change in the number of UFO sightings for the summer and fall seasons is different than in other seasons, as well as that there is a relationship between region and number of sightings for all US regions. A potential short-coming of this analysis is that the data may be skewed for the same reasons as stated in the background section, which would make our overall analysis not as definitive as it could be. To help take this analysis further in the future, it could be interesting to explore the relationship between the number of UFO sightings and the time of day, as well as the most common shapes reported (the latter of which already being a variable in our dataset).
